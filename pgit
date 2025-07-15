@@ -27,33 +27,24 @@ show_parallel_branches() {
     local current_repo=""
     if git rev-parse --show-toplevel >/dev/null 2>&1; then
         current_repo=$(basename $(git rev-parse --show-toplevel))
+    else
+        echo "Error: Not in a git repository"
+        exit 1
     fi
     
-    echo "Parallel branches:"
-    echo "------------------"
+    echo "Parallel branches for $current_repo:"
+    echo "------------------------------------"
     
-    if [ -n "$current_repo" ] && [ -d "$PARALLEL_REPOS/$current_repo" ]; then
-        echo "Current repository ($current_repo):"
+    if [ -d "$PARALLEL_REPOS/$current_repo" ]; then
         find "$PARALLEL_REPOS/$current_repo" -type d -name '.git' -prune | while read -r gitdir; do
             repo_dir=$(dirname "$gitdir")
             branch=$(git --git-dir="$gitdir" branch --show-current)
             branch_name=$(basename "$repo_dir")
             printf "  %-40s %s\n" "$branch_name" "$repo_dir"
         done | sort -k1
-        echo ""
+    else
+        echo "  No parallel branches found"
     fi
-    
-    echo "All repositories:"
-    find "$PARALLEL_REPOS" -mindepth 2 -type d -name '.git' -prune | while read -r gitdir; do
-        repo_dir=$(dirname "$gitdir")
-        branch=$(git --git-dir="$gitdir" branch --show-current)
-        branch_name=$(basename "$repo_dir")
-        repo_name=$(basename $(dirname "$repo_dir"))
-        
-        if [ "$repo_name" != "$current_repo" ] || [ -z "$current_repo" ]; then
-            printf "  %-40s %-20s %s\n" "$branch_name" "[$repo_name]" "$repo_dir"
-        fi
-    done | sort -k2,1
 }
 
 case "$1" in
@@ -67,7 +58,16 @@ case "$1" in
             BRANCH_NAME="$3"
             REPO_NAME=$(basename $(git rev-parse --show-toplevel))
             TARGET_DIR="$PARALLEL_REPOS/$REPO_NAME/$BRANCH_NAME"
-            UPSTREAM_URL=$(git remote get-url upstream || git remote get-url origin)
+            # Try to get upstream first, then origin, with error handling
+            UPSTREAM_URL=""
+            if git remote get-url upstream >/dev/null 2>&1; then
+                UPSTREAM_URL=$(git remote get-url upstream)
+            elif git remote get-url origin >/dev/null 2>&1; then
+                UPSTREAM_URL=$(git remote get-url origin)
+            else
+                echo "Error: No remote repository found (neither 'upstream' nor 'origin')"
+                exit 1
+            fi
             
             # Get default branch name
             DEFAULT_BRANCH=$(get_default_branch "$UPSTREAM_URL")
@@ -110,13 +110,48 @@ case "$1" in
         fi
         ;;
     "branch")
-        show_parallel_branches
+        if [ "$2" = "-D" ]; then
+            if [ -z "$3" ]; then
+                echo "Error: Branch name not specified"
+                exit 1
+            fi
+            
+            BRANCH_NAME="$3"
+            REPO_NAME=$(basename $(git rev-parse --show-toplevel))
+            TARGET_DIR="$PARALLEL_REPOS/$REPO_NAME/$BRANCH_NAME"
+            
+            if [ ! -d "$TARGET_DIR" ]; then
+                echo "Error: Parallel branch '$BRANCH_NAME' not found for repository '$REPO_NAME'"
+                exit 1
+            fi
+            
+            echo "Deleting parallel branch '$BRANCH_NAME' in repository '$REPO_NAME'"
+            echo "Directory: $TARGET_DIR"
+            read -p "Are you sure? (y/N): " -n 1 -r
+            echo
+            
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                rm -rf "$TARGET_DIR"
+                echo "Parallel branch '$BRANCH_NAME' deleted successfully"
+                
+                # Remove empty repo directory if no more branches
+                if [ -d "$PARALLEL_REPOS/$REPO_NAME" ] && [ -z "$(ls -A "$PARALLEL_REPOS/$REPO_NAME")" ]; then
+                    rmdir "$PARALLEL_REPOS/$REPO_NAME"
+                    echo "Empty repository directory removed"
+                fi
+            else
+                echo "Deletion cancelled"
+            fi
+        else
+            show_parallel_branches
+        fi
         ;;
     *)
         echo "pgit - Parallel Git helper"
         echo "Usage:"
         echo "  pgit checkout -b <branch_name>  Create parallel repo with new branch"
-        echo "  pgit branch                   List all parallel branches"
+        echo "  pgit branch                     List all parallel branches"
+        echo "  pgit branch -D <branch_name>    Delete parallel branch"
         exit 1
         ;;
 esac
