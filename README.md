@@ -15,7 +15,7 @@ pgit creates separate working directories for each branch, allowing you to:
 ### Quick Install
 
 ```bash
-git clone <repository-url>
+git clone git@github.com:stepancar/pgit.git
 cd pgit
 ./install.sh
 ```
