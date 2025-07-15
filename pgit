@@ -1,0 +1,85 @@
+#!/bin/bash
+
+# pgit - Parallel Git for multi-session work with Claude
+
+# Get the parallel repos root directory
+PARALLEL_REPOS="${PARALLEL_REPOS:-${TMPDIR:-/tmp}/parallel_repos}"
+
+# Function to get default branch name
+get_default_branch() {
+    local remote_url="$1"
+    # Try to get default branch from remote
+    if git ls-remote --symref "$remote_url" HEAD | grep -q 'ref: refs/heads/'; then
+        git ls-remote --symref "$remote_url" HEAD | head -1 | awk '{print $2}' | sed 's|refs/heads/||'
+    else
+        # Fallback to checking common branch names
+        if git ls-remote --heads "$remote_url" main | grep -q 'refs/heads/main'; then
+            echo "main"
+        else
+            echo "master"
+        fi
+    fi
+}
+
+# Function to show all parallel branches
+show_parallel_branches() {
+    echo "Parallel branches:"
+    echo "------------------"
+    
+    find "$PARALLEL_REPOS" -type d -name '.git' -prune | while read -r gitdir; do
+        repo_dir=$(dirname "$gitdir")
+        branch=$(git --git-dir="$gitdir" branch --show-current)
+        repo_name=$(basename "$repo_dir")
+        
+        if [[ "$repo_name" =~ ^(.+)_(.+)$ ]]; then
+            original_repo="${BASH_REMATCH[1]}"
+            branch_name="${BASH_REMATCH[2]}"
+            printf "%-40s %-30s %s\n" "$branch_name" "[in: $repo_name]" "$repo_dir"
+        fi
+    done | sort -k1
+}
+
+case "$1" in
+    "checkout")
+        if [ "$2" = "-b" ]; then
+            if [ -z "$3" ]; then
+                echo "Error: Branch name not specified"
+                exit 1
+            fi
+            
+            BRANCH_NAME="$3"
+            REPO_NAME=$(basename $(git rev-parse --show-toplevel))
+            TARGET_DIR="$PARALLEL_REPOS/${REPO_NAME}_${BRANCH_NAME}"
+            UPSTREAM_URL=$(git remote get-url upstream || git remote get-url origin)
+            
+            # Get default branch name
+            DEFAULT_BRANCH=$(get_default_branch "$UPSTREAM_URL")
+            echo "Using default branch: $DEFAULT_BRANCH"
+            
+            echo "Creating parallel repository in $TARGET_DIR"
+            mkdir -p "$PARALLEL_REPOS"
+            
+            # Clone with detected default branch
+            git clone --depth 1 --branch "$DEFAULT_BRANCH" "$UPSTREAM_URL" "$TARGET_DIR"
+            
+            cd "$TARGET_DIR" || exit
+            git checkout -b "$BRANCH_NAME"
+            
+            echo "Parallel repository ready at: $TARGET_DIR"
+            echo "You can now open this in a separate IDE session"
+        else
+            echo "pgit checkout only supports '-b' option"
+            exit 1
+        fi
+        ;;
+    "branch")
+        show_parallel_branches
+        ;;
+    *)
+        echo "pgit - Parallel Git helper"
+        echo "Usage:"
+        echo "  pgit checkout -b <branch_name>  Create parallel repo with new branch"
+        echo "  pgit branch                   List all parallel branches"
+        exit 1
+        ;;
+esac
