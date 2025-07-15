@@ -23,20 +23,37 @@ get_default_branch() {
 
 # Function to show all parallel branches
 show_parallel_branches() {
+    # Get current repo name if we're in a git repo
+    local current_repo=""
+    if git rev-parse --show-toplevel >/dev/null 2>&1; then
+        current_repo=$(basename $(git rev-parse --show-toplevel))
+    fi
+    
     echo "Parallel branches:"
     echo "------------------"
     
-    find "$PARALLEL_REPOS" -type d -name '.git' -prune | while read -r gitdir; do
+    if [ -n "$current_repo" ] && [ -d "$PARALLEL_REPOS/$current_repo" ]; then
+        echo "Current repository ($current_repo):"
+        find "$PARALLEL_REPOS/$current_repo" -type d -name '.git' -prune | while read -r gitdir; do
+            repo_dir=$(dirname "$gitdir")
+            branch=$(git --git-dir="$gitdir" branch --show-current)
+            branch_name=$(basename "$repo_dir")
+            printf "  %-40s %s\n" "$branch_name" "$repo_dir"
+        done | sort -k1
+        echo ""
+    fi
+    
+    echo "All repositories:"
+    find "$PARALLEL_REPOS" -mindepth 2 -type d -name '.git' -prune | while read -r gitdir; do
         repo_dir=$(dirname "$gitdir")
         branch=$(git --git-dir="$gitdir" branch --show-current)
-        repo_name=$(basename "$repo_dir")
+        branch_name=$(basename "$repo_dir")
+        repo_name=$(basename $(dirname "$repo_dir"))
         
-        if [[ "$repo_name" =~ ^(.+)_(.+)$ ]]; then
-            original_repo="${BASH_REMATCH[1]}"
-            branch_name="${BASH_REMATCH[2]}"
-            printf "%-40s %-30s %s\n" "$branch_name" "[in: $repo_name]" "$repo_dir"
+        if [ "$repo_name" != "$current_repo" ] || [ -z "$current_repo" ]; then
+            printf "  %-40s %-20s %s\n" "$branch_name" "[$repo_name]" "$repo_dir"
         fi
-    done | sort -k1
+    done | sort -k2,1
 }
 
 case "$1" in
@@ -49,7 +66,7 @@ case "$1" in
             
             BRANCH_NAME="$3"
             REPO_NAME=$(basename $(git rev-parse --show-toplevel))
-            TARGET_DIR="$PARALLEL_REPOS/${REPO_NAME}_${BRANCH_NAME}"
+            TARGET_DIR="$PARALLEL_REPOS/$REPO_NAME/$BRANCH_NAME"
             UPSTREAM_URL=$(git remote get-url upstream || git remote get-url origin)
             
             # Get default branch name
@@ -67,6 +84,26 @@ case "$1" in
             
             echo "Parallel repository ready at: $TARGET_DIR"
             echo "You can now open this in a separate IDE session"
+            
+            # Open new terminal session in the target directory
+            CURRENT_DIR=$(pwd)
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                # macOS
+                osascript -e "tell application \"Terminal\" to do script \"export OLDPWD='$CURRENT_DIR' && cd '$TARGET_DIR'\""
+            elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+                # Linux - try common terminal emulators
+                if command -v gnome-terminal >/dev/null 2>&1; then
+                    gnome-terminal --working-directory="$TARGET_DIR" -- bash -c "export OLDPWD='$CURRENT_DIR'; exec bash" &
+                elif command -v xterm >/dev/null 2>&1; then
+                    xterm -e "export OLDPWD='$CURRENT_DIR' && cd '$TARGET_DIR' && bash" &
+                elif command -v konsole >/dev/null 2>&1; then
+                    konsole --workdir "$TARGET_DIR" -e bash -c "export OLDPWD='$CURRENT_DIR'; exec bash" &
+                else
+                    echo "No supported terminal found. Run: cd \"$TARGET_DIR\""
+                fi
+            else
+                echo "Unsupported OS. Run: cd \"$TARGET_DIR\""
+            fi
         else
             echo "pgit checkout only supports '-b' option"
             exit 1
